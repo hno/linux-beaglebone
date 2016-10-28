@@ -241,11 +241,32 @@ static void omap2_mcspi_set_enable(const struct spi_device *spi, int enable)
 	mcspi_read_cs_reg(spi, OMAP2_MCSPI_CHCTRL0);
 }
 
-static void omap2_mcspi_set_cs(struct spi_device *spi, bool enable)
+static void mcspi_set_force(struct spi_device *spi, bool force)
 {
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
 	u32 l;
 
+	int err = pm_runtime_get_sync(mcspi->dev);
+	if (err < 0) {
+		dev_err(mcspi->dev, "failed to get sync: %d\n", err);
+		return;
+	}
+
+	l = mcspi_cached_chconf0(spi);
+
+	if (force)
+		l |= OMAP2_MCSPI_CHCONF_FORCE;
+	else
+		l &= ~OMAP2_MCSPI_CHCONF_FORCE;
+
+	mcspi_write_chconf0(spi, l);
+
+	pm_runtime_mark_last_busy(mcspi->dev);
+	pm_runtime_put_autosuspend(mcspi->dev);
+}
+
+static void omap2_mcspi_set_cs(struct spi_device *spi, bool enable)
+{
 	/* The controller handles the inverted chip selects
 	 * using the OMAP2_MCSPI_CHCONF_EPOL bit so revert
 	 * the inversion from the core spi_set_cs function.
@@ -253,25 +274,8 @@ static void omap2_mcspi_set_cs(struct spi_device *spi, bool enable)
 	if (spi->mode & SPI_CS_HIGH)
 		enable = !enable;
 
-	if (spi->controller_state) {
-		int err = pm_runtime_get_sync(mcspi->dev);
-		if (err < 0) {
-			dev_err(mcspi->dev, "failed to get sync: %d\n", err);
-			return;
-		}
-
-		l = mcspi_cached_chconf0(spi);
-
-		if (enable)
-			l &= ~OMAP2_MCSPI_CHCONF_FORCE;
-		else
-			l |= OMAP2_MCSPI_CHCONF_FORCE;
-
-		mcspi_write_chconf0(spi, l);
-
-		pm_runtime_mark_last_busy(mcspi->dev);
-		pm_runtime_put_autosuspend(mcspi->dev);
-	}
+	if (spi->controller_state)
+		mcspi_set_force(spi, !enable);
 }
 
 static void omap2_mcspi_set_master_mode(struct spi_master *master)
@@ -1149,7 +1153,7 @@ static int omap2_mcspi_transfer_one(struct spi_master *master,
 	omap2_mcspi_set_enable(spi, 0);
 
 	if (gpio_is_valid(spi->cs_gpio))
-		omap2_mcspi_set_cs(spi, spi->mode & SPI_CS_HIGH);
+		mcspi_set_force(spi, true);
 
 	if (par_override ||
 	    (t->speed_hz != spi->max_speed_hz) ||
@@ -1238,7 +1242,7 @@ out:
 	omap2_mcspi_set_enable(spi, 0);
 
 	if (gpio_is_valid(spi->cs_gpio))
-		omap2_mcspi_set_cs(spi, !(spi->mode & SPI_CS_HIGH));
+		mcspi_set_force(spi, false);
 
 	if (mcspi->fifo_depth > 0 && t)
 		omap2_mcspi_set_fifo(spi, t, 0);

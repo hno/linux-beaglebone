@@ -107,6 +107,7 @@ struct omap2_mcspi_dma {
 
 	char dma_rx_ch_name[14];
 	char dma_tx_ch_name[14];
+	int uses;
 };
 
 /* use PIO for small transfers, avoiding DMA setup/teardown overhead and
@@ -147,6 +148,7 @@ struct omap2_mcspi_cs {
 	struct list_head	node;
 	/* Context save and restore shadow register */
 	u32			chconf0, chctrl0;
+	struct omap2_mcspi_dma	*dma;
 };
 
 static inline void mcspi_write_reg(struct spi_master *master,
@@ -389,8 +391,8 @@ static int mcspi_wait_for_reg_bit(void __iomem *reg, unsigned long bit)
 static void omap2_mcspi_rx_callback(void *data)
 {
 	struct spi_device *spi = data;
-	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
-	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi->chip_select];
+	struct omap2_mcspi_cs *cs = spi->controller_state;
+	struct omap2_mcspi_dma *mcspi_dma = cs->dma;
 
 	/* We must disable the DMA RX request */
 	omap2_mcspi_set_dma_req(spi, 1, 0);
@@ -401,8 +403,8 @@ static void omap2_mcspi_rx_callback(void *data)
 static void omap2_mcspi_tx_callback(void *data)
 {
 	struct spi_device *spi = data;
-	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
-	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi->chip_select];
+	struct omap2_mcspi_cs *cs = spi->controller_state;
+	struct omap2_mcspi_dma *mcspi_dma = cs->dma;
 
 	/* We must disable the DMA TX request */
 	omap2_mcspi_set_dma_req(spi, 0, 0);
@@ -414,12 +416,10 @@ static void omap2_mcspi_tx_dma(struct spi_device *spi,
 				struct spi_transfer *xfer,
 				struct dma_slave_config cfg)
 {
-	struct omap2_mcspi	*mcspi;
-	struct omap2_mcspi_dma  *mcspi_dma;
+	struct omap2_mcspi_cs	*cs = spi->controller_state;
+	struct omap2_mcspi_dma	*mcspi_dma = cs->dma;
 	unsigned int		count;
 
-	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 	count = xfer->len;
 
 	if (mcspi_dma->dma_tx) {
@@ -449,8 +449,9 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 				struct dma_slave_config cfg,
 				unsigned es)
 {
-	struct omap2_mcspi	*mcspi;
-	struct omap2_mcspi_dma  *mcspi_dma;
+	struct omap2_mcspi	*mcspi = spi_master_get_devdata(spi->master);
+	struct omap2_mcspi_cs	*cs = spi->controller_state;
+	struct omap2_mcspi_dma	*mcspi_dma = cs->dma;
 	unsigned int		count, transfer_reduction = 0;
 	struct scatterlist	*sg_out[2];
 	int			nb_sizes = 0, out_mapped_nents[2], ret, x;
@@ -458,9 +459,6 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 	u32			l;
 	int			elements = 0;
 	int			word_len, element_count;
-	struct omap2_mcspi_cs	*cs = spi->controller_state;
-	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 	count = xfer->len;
 
 	/*
@@ -595,9 +593,9 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 static unsigned
 omap2_mcspi_txrx_dma(struct spi_device *spi, struct spi_transfer *xfer)
 {
-	struct omap2_mcspi	*mcspi;
+	struct omap2_mcspi	*mcspi = spi_master_get_devdata(spi->master);
 	struct omap2_mcspi_cs	*cs = spi->controller_state;
-	struct omap2_mcspi_dma  *mcspi_dma;
+	struct omap2_mcspi_dma	*mcspi_dma = cs->dma;
 	unsigned int		count;
 	u32			l;
 	u8			*rx;
@@ -610,8 +608,6 @@ omap2_mcspi_txrx_dma(struct spi_device *spi, struct spi_transfer *xfer)
 	void __iomem            *irqstat_reg;
 	int			wait_res;
 
-	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 	l = mcspi_cached_chconf0(spi);
 
 
@@ -996,12 +992,10 @@ static int omap2_mcspi_setup_transfer(struct spi_device *spi,
 static int omap2_mcspi_request_dma(struct spi_device *spi)
 {
 	struct spi_master	*master = spi->master;
-	struct omap2_mcspi	*mcspi;
-	struct omap2_mcspi_dma	*mcspi_dma;
+	struct omap2_mcspi	*mcspi = spi_master_get_devdata(master);
+	struct omap2_mcspi_cs	*cs = spi->controller_state;
+	struct omap2_mcspi_dma	*mcspi_dma = cs->dma;
 	int ret = 0;
-
-	mcspi = spi_master_get_devdata(master);
-	mcspi_dma = mcspi->dma_channels + spi->chip_select;
 
 	init_completion(&mcspi_dma->dma_rx_completion);
 	init_completion(&mcspi_dma->dma_tx_completion);
@@ -1035,17 +1029,19 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 	int			ret;
 	struct omap2_mcspi	*mcspi = spi_master_get_devdata(spi->master);
 	struct omap2_mcspi_regs	*ctx = &mcspi->ctx;
-	struct omap2_mcspi_dma	*mcspi_dma;
 	struct omap2_mcspi_cs	*cs = spi->controller_state;
 
-	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
-
 	if (!cs) {
+		int channel = 0;
 		cs = kzalloc(sizeof *cs, GFP_KERNEL);
 		if (!cs)
 			return -ENOMEM;
-		cs->base = mcspi->base + spi->chip_select * 0x14;
-		cs->phys = mcspi->phys + spi->chip_select * 0x14;
+		if (!gpio_is_valid(spi->cs_gpio))
+			channel = spi->chip_select;
+		cs->base = mcspi->base + channel * 0x14;
+		cs->phys = mcspi->phys + channel * 0x14;
+		cs->dma = &mcspi->dma_channels[channel];
+		cs->dma->uses += 1;
 		cs->mode = 0;
 		cs->chconf0 = 0;
 		cs->chctrl0 = 0;
@@ -1064,7 +1060,7 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 		}
 	}
 
-	if (!mcspi_dma->dma_rx || !mcspi_dma->dma_tx) {
+	if (!cs->dma->dma_rx || !cs->dma->dma_tx) {
 		ret = omap2_mcspi_request_dma(spi);
 		if (ret)
 			dev_warn(&spi->dev, "not using DMA for McSPI (%d)\n",
@@ -1098,14 +1094,16 @@ static void omap2_mcspi_cleanup(struct spi_device *spi)
 		kfree(cs);
 	}
 
-	if (spi->chip_select < spi->master->num_chipselect) {
-		mcspi_dma = &mcspi->dma_channels[spi->chip_select];
+	if (spi->chip_select < spi->master->num_chipselect && cs) {
+		mcspi_dma = cs->dma;
 
-		if (mcspi_dma->dma_rx) {
+		cs->dma->uses--;
+
+		if (!cs->dma->uses && mcspi_dma->dma_rx) {
 			dma_release_channel(mcspi_dma->dma_rx);
 			mcspi_dma->dma_rx = NULL;
 		}
-		if (mcspi_dma->dma_tx) {
+		if (!cs->dma->uses && mcspi_dma->dma_tx) {
 			dma_release_channel(mcspi_dma->dma_tx);
 			mcspi_dma->dma_tx = NULL;
 		}
@@ -1127,18 +1125,13 @@ static int omap2_mcspi_transfer_one(struct spi_master *master,
 	 * chipselect with the FORCE bit ... CS != channel enable.
 	 */
 
-	struct omap2_mcspi		*mcspi;
-	struct omap2_mcspi_dma		*mcspi_dma;
-	struct omap2_mcspi_cs		*cs;
-	struct omap2_mcspi_device_config *cd;
+	struct omap2_mcspi		*mcspi = spi_master_get_devdata(master);
+	struct omap2_mcspi_cs		*cs = spi->controller_state;
+	struct omap2_mcspi_dma		*mcspi_dma = cs->dma;
+	struct omap2_mcspi_device_config *cd = spi->controller_data;
 	int				par_override = 0;
 	int				status = 0;
 	u32				chconf;
-
-	mcspi = spi_master_get_devdata(master);
-	mcspi_dma = mcspi->dma_channels + spi->chip_select;
-	cs = spi->controller_state;
-	cd = spi->controller_data;
 
 	/*
 	 * The slave driver could have changed spi->mode in which case

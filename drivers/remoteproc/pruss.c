@@ -48,6 +48,18 @@ struct pruss_private_data {
 	bool uses_wrapper;
 };
 
+/* Workaround for devicetree platform hacks not applied in all cases */
+extern int omap_device_assert_hardreset(struct platform_device *pdev,
+                                 const char *name);
+extern int omap_device_deassert_hardreset(struct platform_device *pdev,
+                                 const char *name);
+
+static struct pruss_platform_data pruss_pdata = {
+	.reset_name = "pruss",
+	.assert_reset = omap_device_assert_hardreset,
+	.deassert_reset = omap_device_deassert_hardreset,
+};
+
 /**
  * struct pruss_match_private_data - private data to handle multiple instances
  * @device_name: device name of the PRUSS instance
@@ -629,6 +641,9 @@ static int pruss_probe(struct platform_device *pdev)
 		dev_err(dev, "missing private data\n");
 		return -ENODEV;
 	}
+
+	if (data->has_reset && !pdata)
+		pdata = &pruss_pdata;
 
 	if (data->has_reset && (!pdata || !pdata->deassert_reset ||
 				!pdata->assert_reset || !pdata->reset_name)) {

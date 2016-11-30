@@ -889,6 +889,7 @@ int omap_device_assert_hardreset(struct platform_device *pdev, const char *name)
 
 	return ret;
 }
+EXPORT_SYMBOL(omap_device_assert_hardreset);
 
 /**
  * omap_device_deassert_hardreset - release a device's hardreset line
@@ -917,6 +918,7 @@ int omap_device_deassert_hardreset(struct platform_device *pdev,
 
 	return ret;
 }
+EXPORT_SYMBOL(omap_device_deassert_hardreset);
 
 /**
  * omap_device_get_by_hwmod_name() - convert a hwmod name to

@@ -2,8 +2,8 @@
  * AD5024, AD5025, AD5044, AD5045, AD5064, AD5064-1, AD5065, AD5625, AD5625R,
  * AD5627, AD5627R, AD5628, AD5629R, AD5645R, AD5647R, AD5648, AD5665, AD5665R,
  * AD5666, AD5667, AD5667R, AD5668, AD5669R, LTC2606, LTC2607, LTC2609, LTC2616,
- * LTC2617, LTC2619, LTC2626, LTC2627, LTC2629 Digital to analog converters
- * driver
+ * LTC2617, LTC2619, LTC2626, LTC2627, LTC2629, LTC2666 Digital to analog
+ * converters driver
  *
  * Copyright 2011 Analog Devices Inc.
  *
@@ -30,6 +30,9 @@
 #define AD5064_ADDR(x)				((x) << 20)
 #define AD5064_CMD(x)				((x) << 24)
 
+#define LTC2666_ADDR(x)				((x) << 16)
+#define LTC2666_CMD(x)				((x) << 20)
+
 #define AD5064_ADDR_ALL_DAC			0xF
 
 #define AD5064_CMD_WRITE_INPUT_N		0x0
@@ -47,6 +50,8 @@
 
 #define AD5064_CONFIG_DAISY_CHAIN_ENABLE	BIT(1)
 #define AD5064_CONFIG_INT_VREF_ENABLE		BIT(0)
+
+#define LTC2666_CONFIG_INT_VREF_DISABLE		BIT(0)
 
 #define AD5064_LDAC_PWRDN_NONE			0x0
 #define AD5064_LDAC_PWRDN_1K			0x1
@@ -168,6 +173,7 @@ enum ad5064_type {
 	ID_LTC2626,
 	ID_LTC2627,
 	ID_LTC2629,
+	ID_LTD2666,
 };
 
 static int ad5064_write(struct ad5064_state *st, unsigned int cmd,
@@ -216,6 +222,10 @@ static const char * const ltc2617_powerdown_modes[] = {
 	"90kohm_to_gnd",
 };
 
+static const char * const ltc2666_powerdown_modes[] = {
+	"39kohm_to_gnd",
+};
+
 static int ad5064_get_powerdown_mode(struct iio_dev *indio_dev,
 	const struct iio_chan_spec *chan)
 {
@@ -246,9 +256,9 @@ static const struct iio_enum ad5064_powerdown_mode_enum = {
 	.set = ad5064_set_powerdown_mode,
 };
 
-static const struct iio_enum ltc2617_powerdown_mode_enum = {
-	.items = ltc2617_powerdown_modes,
-	.num_items = ARRAY_SIZE(ltc2617_powerdown_modes),
+static const struct iio_enum ltc2666_powerdown_mode_enum = {
+	.items = ltc2666_powerdown_modes,
+	.num_items = ARRAY_SIZE(ltc2666_powerdown_modes),
 	.get = ad5064_get_powerdown_mode,
 	.set = ad5064_set_powerdown_mode,
 };
@@ -425,6 +435,8 @@ static DECLARE_AD5064_CHANNELS(ad5669_channels, 16, 0, ad5064_ext_info);
 static DECLARE_AD5064_CHANNELS(ltc2607_channels, 16, 0, ltc2617_ext_info);
 static DECLARE_AD5064_CHANNELS(ltc2617_channels, 14, 2, ltc2617_ext_info);
 static DECLARE_AD5064_CHANNELS(ltc2627_channels, 12, 4, ltc2617_ext_info);
+
+static DECLARE_AD5064_CHANNELS(ltc2666_channels, 16, 0, ltc2666_ext_info);
 
 static const struct ad5064_chip_info ad5064_chip_info_tbl[] = {
 	[ID_AD5024] = {
@@ -724,6 +736,13 @@ static const struct ad5064_chip_info ad5064_chip_info_tbl[] = {
 		.num_channels = 4,
 		.regmap_type = AD5064_REGMAP_LTC,
 	},
+	[ID_LTC2666] = {
+		.shared_vref = true,
+		.internal_vref = 1,
+		.channels = ltc2666_channels,
+		.num_channels = 8,
+		.regmap_type = AD5064_REGMAP_LTC,
+	},
 };
 
 static inline unsigned int ad5064_num_vref(struct ad5064_state *st)
@@ -744,20 +763,59 @@ static const char * const ad5064_vref_name(struct ad5064_state *st,
 	return st->chip_info->shared_vref ? "vref" : ad5064_vref_names[vref];
 }
 
-static int ad5064_set_config(struct ad5064_state *st, unsigned int val)
+static uint32_t ltc2666_config(struct ad5064_state *st)
 {
+	uint32_t config = 0;
+	if (!st->use_internal_vref)
+		config |= LTC2666_CONFIG_INT_VREF_DISABLE;
+	return config;
+}
+
+static uint32_t ad5064_config(struct ad5064_state *st)
+{
+	uint32_t config = 0;
+	if (!st->use_internal_vref)
+		config |= AD5064_CONFIG_INT_VREF_ENABLE;
+	return config;
+}
+
+static int ad5064_update_config(struct ad5064_state *st)
+{
+	uint32_t config;
 	unsigned int cmd;
 
 	switch (st->chip_info->regmap_type) {
+	case AD5064_REGMAP_LTC:
+		config = ltc2666_config(st);
+		cmd = AD5064_CMD_CONFIG_V2;
+		break;
 	case AD5064_REGMAP_ADI2:
+		config = ad5064_config(st);
 		cmd = AD5064_CMD_CONFIG_V2;
 		break;
 	default:
+		config = ad5064_config(st);
 		cmd = AD5064_CMD_CONFIG;
 		break;
 	}
 
-	return ad5064_write(st, cmd, 0, val, 0);
+	return ad5064_write(st, cmd, 0, st->config, 0);
+}
+
+static int ad5064_enable_internal_vref(struct ad5064_state *st, bool state)
+{
+	if (st->chip_info->regmap_type == AD5064_REGMAP_LTC) {
+		if (state)
+			state->config &= ~CONFIG_LTC2666_DISABLE_INT_VREF;
+		else
+			state->config |= CONFIG_LTC2666_DISABLE_INT_VREF;
+	} else {
+		if (state)
+			state->config |= CONFIG_AD5064_ENABLE_INT_VREF;
+		else
+			state->config &= ~CONFIG_AD5064_ENABLE_INT_VREF;
+	}
+	ad5064_update_config(st);
 }
 
 static int ad5064_probe(struct device *dev, enum ad5064_type type,
@@ -789,16 +847,16 @@ static int ad5064_probe(struct device *dev, enum ad5064_type type,
 		if (!st->chip_info->internal_vref)
 			return ret;
 		st->use_internal_vref = true;
-		ret = ad5064_set_config(st, AD5064_CONFIG_INT_VREF_ENABLE);
-		if (ret) {
-			dev_err(dev, "Failed to enable internal vref: %d\n",
-				ret);
-			return ret;
-		}
 	} else {
 		ret = regulator_bulk_enable(ad5064_num_vref(st), st->vref_reg);
 		if (ret)
 			return ret;
+	}
+	ret = ad5064_update_config(st);
+	if (ret) {
+		dev_err(dev, "Failed to configure: %d\n",
+			ret);
+		return ret;
 	}
 
 	indio_dev->dev.parent = dev;
@@ -848,7 +906,15 @@ static int ad5064_spi_write(struct ad5064_state *st, unsigned int cmd,
 {
 	struct spi_device *spi = to_spi_device(st->dev);
 
-	st->data.spi = cpu_to_be32(AD5064_CMD(cmd) | AD5064_ADDR(addr) | val);
+	switch (st->chip_info->regmap_type)
+	case AD5064_REGMAP_LTC:
+		st->data.spi = cpu_to_be32(LTC2666_CMD(cmd) | LTC2666_ADDR(addr) | val);
+		break;
+	default:
+		st->data.spi = cpu_to_be32(AD5064_CMD(cmd) | AD5064_ADDR(addr) | val);
+		break;
+	}
+
 	return spi_write(spi, &st->data.spi, sizeof(st->data.spi));
 }
 

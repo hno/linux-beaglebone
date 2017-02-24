@@ -173,7 +173,7 @@ enum ad5064_type {
 	ID_LTC2626,
 	ID_LTC2627,
 	ID_LTC2629,
-	ID_LTD2666,
+	ID_LTC2666,
 };
 
 static int ad5064_write(struct ad5064_state *st, unsigned int cmd,
@@ -252,6 +252,13 @@ static int ad5064_set_powerdown_mode(struct iio_dev *indio_dev,
 static const struct iio_enum ad5064_powerdown_mode_enum = {
 	.items = ad5064_powerdown_modes,
 	.num_items = ARRAY_SIZE(ad5064_powerdown_modes),
+	.get = ad5064_get_powerdown_mode,
+	.set = ad5064_set_powerdown_mode,
+};
+
+static const struct iio_enum ltc2617_powerdown_mode_enum = {
+	.items = ltc2617_powerdown_modes,
+	.num_items = ARRAY_SIZE(ltc2617_powerdown_modes),
 	.get = ad5064_get_powerdown_mode,
 	.set = ad5064_set_powerdown_mode,
 };
@@ -382,6 +389,18 @@ static const struct iio_chan_spec_ext_info ltc2617_ext_info[] = {
 	},
 	IIO_ENUM("powerdown_mode", IIO_SEPARATE, &ltc2617_powerdown_mode_enum),
 	IIO_ENUM_AVAILABLE("powerdown_mode", &ltc2617_powerdown_mode_enum),
+	{ },
+};
+
+static const struct iio_chan_spec_ext_info ltc2666_ext_info[] = {
+	{
+		.name = "powerdown",
+		.read = ad5064_read_dac_powerdown,
+		.write = ad5064_write_dac_powerdown,
+		.shared = IIO_SEPARATE,
+	},
+	IIO_ENUM("powerdown_mode", IIO_SEPARATE, &ltc2666_powerdown_mode_enum),
+	IIO_ENUM_AVAILABLE("powerdown_mode", &ltc2666_powerdown_mode_enum),
 	{ },
 };
 
@@ -799,23 +818,7 @@ static int ad5064_update_config(struct ad5064_state *st)
 		break;
 	}
 
-	return ad5064_write(st, cmd, 0, st->config, 0);
-}
-
-static int ad5064_enable_internal_vref(struct ad5064_state *st, bool state)
-{
-	if (st->chip_info->regmap_type == AD5064_REGMAP_LTC) {
-		if (state)
-			state->config &= ~CONFIG_LTC2666_DISABLE_INT_VREF;
-		else
-			state->config |= CONFIG_LTC2666_DISABLE_INT_VREF;
-	} else {
-		if (state)
-			state->config |= CONFIG_AD5064_ENABLE_INT_VREF;
-		else
-			state->config &= ~CONFIG_AD5064_ENABLE_INT_VREF;
-	}
-	ad5064_update_config(st);
+	return ad5064_write(st, cmd, 0, config, 0);
 }
 
 static int ad5064_probe(struct device *dev, enum ad5064_type type,
@@ -906,7 +909,7 @@ static int ad5064_spi_write(struct ad5064_state *st, unsigned int cmd,
 {
 	struct spi_device *spi = to_spi_device(st->dev);
 
-	switch (st->chip_info->regmap_type)
+	switch (st->chip_info->regmap_type) {
 	case AD5064_REGMAP_LTC:
 		st->data.spi = cpu_to_be32(LTC2666_CMD(cmd) | LTC2666_ADDR(addr) | val);
 		break;
